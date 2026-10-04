@@ -1,7 +1,7 @@
 // Cloudflare Workers config — `pnpm cf:deploy` builds the site and uploads it.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "image-generation",
+  "name": "image-ai",
   "main": "worker/index.js",
   "compatibility_date": "2026-10-01",
   "assets": {

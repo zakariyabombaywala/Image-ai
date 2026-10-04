@@ -92,10 +92,10 @@ The local Python model can't run there, so the deployed site always uses **Polli
 1. Log in once: `npx wrangler login`
 2. Store your Pollinations key as a secret (optional — without it you get the free, rate-limited mode):
    `npx wrangler secret put POLLINATIONS_API_KEY`
-3. Deploy: `pnpm cf:deploy` — prints the live URL (`https://image-generation.<you>.workers.dev`).
+3. Deploy: `pnpm cf:deploy` — prints the live URL (`https://image-ai.<you>.workers.dev`).
 
 Test the Worker locally first with `pnpm cf:dev` (http://localhost:8787). To use your own domain, add it
-in the Cloudflare dashboard under *Workers & Pages → image-generation → Settings → Domains & Routes*.
+in the Cloudflare dashboard under *Workers & Pages → image-ai → Settings → Domains & Routes*.
 To auto-deploy on every push, connect the GitHub repo there (*Settings → Build*) with build command
 `pnpm build` and deploy command `npx wrangler deploy`.
 
