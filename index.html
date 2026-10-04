@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Imagine — AI Image Generator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">✦</span>
+      <span>Imagine</span>
+    </div>
+    <button id="themeToggle" class="ghost" title="Toggle theme">◐</button>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Turn words into images</h1>
+      <p>Describe anything you can imagine and let AI paint it for you.</p>
+    </section>
+
+    <div id="freeBanner" class="banner" hidden>
+      <strong>Free mode:</strong> images have a watermark and are made one at a time
+      (about 30–40&nbsp;s each). Add a free <a href="https://enter.pollinations.ai/keys" target="_blank" rel="noopener">Pollinations API key</a>
+      to <code>.env</code> to remove the watermark, unlock better models and generate all variants at once.
+    </div>
+
+    <form id="genForm" class="panel">
+      <div class="prompt-wrap">
+        <textarea id="prompt" rows="3" maxlength="1000"
+          placeholder="A cozy cabin in a snowy forest at night, warm light in the windows, northern lights above…"></textarea>
+        <div class="prompt-actions">
+          <button type="button" id="surpriseBtn" class="ghost small">🎲 Surprise me</button>
+          <span id="charCount" class="muted">0 / 1000</span>
+        </div>
+      </div>
+
+      <div class="options">
+        <label>
+          Style
+          <select id="style">
+            <option value="">None</option>
+            <option value="photorealistic, ultra detailed, 8k, sharp focus">Photorealistic</option>
+            <option value="digital art, vibrant colors, highly detailed">Digital art</option>
+            <option value="anime style, studio ghibli inspired, cel shading">Anime</option>
+            <option value="oil painting, impressionist brush strokes, canvas texture">Oil painting</option>
+            <option value="watercolor painting, soft edges, pastel colors">Watercolor</option>
+            <option value="3d render, octane render, soft studio lighting">3D render</option>
+            <option value="pixel art, 16-bit, retro game style">Pixel art</option>
+            <option value="cinematic still, dramatic lighting, film grain, 35mm">Cinematic</option>
+            <option value="minimalist flat vector illustration, clean lines">Flat vector</option>
+          </select>
+        </label>
+
+        <label>
+          Size
+          <select id="size">
+            <option value="1024x1024">Square 1:1</option>
+            <option value="1344x768">Landscape 16:9</option>
+            <option value="768x1344">Portrait 9:16</option>
+            <option value="1152x896">Photo 4:3</option>
+            <option value="896x1152">Tall 3:4</option>
+          </select>
+        </label>
+
+        <label>
+          Images
+          <select id="count">
+            <option>1</option>
+            <option>2</option>
+            <option selected>4</option>
+          </select>
+        </label>
+
+        <label>
+          Model
+          <select id="model" disabled>
+            <option value="">Free model</option>
+          </select>
+        </label>
+
+        <label>
+          Seed
+          <input id="seed" type="number" placeholder="Random" min="0" />
+        </label>
+
+        <label class="check">
+          <input id="enhance" type="checkbox" checked />
+          Enhance prompt
+        </label>
+      </div>
+
+      <button id="generateBtn" type="submit" class="primary">
+        <span class="btn-label">Generate</span>
+      </button>
+      <p id="error" class="error" hidden></p>
+    </form>
+
+    <section>
+      <div class="section-head">
+        <h2>Results</h2>
+      </div>
+      <div id="results" class="grid">
+        <p class="empty muted">Your images will appear here.</p>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>History</h2>
+        <button id="clearHistory" class="ghost small">Clear</button>
+      </div>
+      <div id="history" class="grid small-grid"></div>
+    </section>
+  </main>
+
+  <div id="lightbox" class="lightbox" hidden>
+    <button class="close ghost" aria-label="Close">✕</button>
+    <img alt="" />
+    <p class="lb-caption"></p>
+  </div>
+
+  <footer>Images generated with <a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a></footer>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
