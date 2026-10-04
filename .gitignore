@@ -10,3 +10,7 @@ dist/
 model-server/.venv/
 model-server/models/
 __pycache__/
+
+# Cloudflare
+.wrangler/
+.dev.vars

@@ -10,10 +10,13 @@
     "preview": "node scripts/run.js vite preview",
     "start": "node scripts/run.js node server/index.js",
     "model": "node scripts/run.js",
-    "setup:model": "node scripts/setup-model.js"
+    "setup:model": "node scripts/setup-model.js",
+    "cf:dev": "vite build && wrangler dev",
+    "cf:deploy": "vite build && wrangler deploy"
   },
   "devDependencies": {
-    "vite": "^7.0.0"
+    "vite": "^7.0.0",
+    "wrangler": "^4.147.0"
   },
   "engines": {
     "node": ">=20.12"

@@ -71,6 +71,8 @@ src/style.css           Styles
 public/                 Static files copied as-is (favicon)
 server/proxy.js         /api proxy — picks local model or Pollinations
 server/index.js         Production server for `pnpm start`
+worker/index.js         Cloudflare Worker (site + /api proxy) for `pnpm cf:deploy`
+wrangler.jsonc          Cloudflare Workers config
 model-server/server.py  Local Stable Diffusion server (Python)
 model-server/models/    Downloaded model files (not committed)
 scripts/run.js          Starts the model server alongside dev/preview/start
@@ -81,6 +83,23 @@ dist/                   Production build output (generated)
 ```
 
 ## Deploying
+
+### Cloudflare Workers (recommended)
+
+The site and the `/api` proxy run on Cloudflare (`worker/index.js`, configured in `wrangler.jsonc`).
+The local Python model can't run there, so the deployed site always uses **Pollinations**.
+
+1. Log in once: `npx wrangler login`
+2. Store your Pollinations key as a secret (optional — without it you get the free, rate-limited mode):
+   `npx wrangler secret put POLLINATIONS_API_KEY`
+3. Deploy: `pnpm cf:deploy` — prints the live URL (`https://image-generation.<you>.workers.dev`).
+
+Test the Worker locally first with `pnpm cf:dev` (http://localhost:8787). To use your own domain, add it
+in the Cloudflare dashboard under *Workers & Pages → image-generation → Settings → Domains & Routes*.
+To auto-deploy on every push, connect the GitHub repo there (*Settings → Build*) with build command
+`pnpm build` and deploy command `npx wrangler deploy`.
+
+### Your own server
 
 Run `pnpm build` then `pnpm start` on a machine with Node.js and Python. With the local provider the
 model runs on that machine, so it needs enough RAM (8 GB+) — a GPU server makes it much faster.
