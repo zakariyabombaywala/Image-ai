@@ -27,24 +27,50 @@ const SURPRISE = [
 ];
 
 let hasKey = false;
+let isLocal = false;
+let parallel = false;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ---------- server status (API key present?) ----------
-async function loadStatus() {
-  try {
-    const status = await (await fetch("/api/status")).json();
-    hasKey = status.hasKey;
-    if (hasKey) {
-      modelEl.innerHTML = "";
-      for (const [value, label] of Object.entries(status.models)) {
-        modelEl.append(new Option(label, value));
-      }
-      modelEl.disabled = false;
-    }
-  } catch {
-    hasKey = false;
+// ---------- server status (which provider, API key, local model state) ----------
+function setModels(models, enabled) {
+  modelEl.innerHTML = "";
+  for (const [value, label] of Object.entries(models)) modelEl.append(new Option(label, value));
+  modelEl.disabled = !enabled;
+}
+
+function showLocalStatus(local) {
+  const banner = $("localBanner");
+  banner.hidden = false;
+  if (local.ready) {
+    banner.innerHTML = "<strong>Local model ready.</strong> Images are generated on this computer — " +
+      "no internet service is used. Each image takes a little while on the CPU.";
+  } else if (local.loading) {
+    banner.innerHTML = "<strong>Loading local model…</strong> The first start downloads the model " +
+      "(about 4&nbsp;GB) — this can take several minutes.";
+  } else {
+    banner.innerHTML = "<strong>Local model unavailable:</strong> ";
+    banner.append(local.error || "unknown error");
   }
-  $("freeBanner").hidden = hasKey;
+}
+
+async function loadStatus() {
+  let status = {};
+  try { status = await (await fetch("/api/status")).json(); } catch {}
+  isLocal = status.provider === "local";
+  hasKey = Boolean(status.hasKey);
+  parallel = Boolean(status.parallel);
+
+  $("freeBanner").hidden = isLocal || hasKey;
+  $("localBanner").hidden = !isLocal;
+  $("enhance").disabled = isLocal; // prompt enhancing is a Pollinations feature
+
+  if (isLocal) {
+    setModels(status.models, false);
+    showLocalStatus(status.local);
+    if (!status.local.ready) setTimeout(loadStatus, 3000); // poll until the model is loaded
+  } else if (hasKey) {
+    setModels(status.models, true);
+  }
 }
 
 // ---------- history storage (IndexedDB, stores image blobs) ----------
@@ -231,17 +257,48 @@ function imageUrl(item) {
   return "/api/image?" + params;
 }
 
+/** fetch() that shows a running "Generating… 12s" timer on the card. */
+async function timedFetch(url, card) {
+  const start = Date.now();
+  card.setStatus("Generating…");
+  const timer = setInterval(() => {
+    card.setStatus(`Generating… ${Math.round((Date.now() - start) / 1000)}s`);
+  }, 1000);
+  try {
+    return await fetch(url);
+  } catch {
+    return null;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** Local model: wait while it loads, then generate. */
+async function generateLocal(item, card) {
+  for (let attempt = 0; attempt < 120; attempt++) {
+    const res = await timedFetch(imageUrl(item), card);
+    if (res?.ok) return res.blob();
+    const body = res ? await res.json().catch(() => ({})) : {};
+    if (body.error === "model_loading") {
+      card.setStatus("Waiting for the local model to load…");
+      await sleep(5000);
+      continue;
+    }
+    if (body.error === "upstream_unreachable" || !res) {
+      throw new Error("Local model server is not running — restart `pnpm dev`.");
+    }
+    throw new Error(typeof body.detail === "string" ? body.detail : "Generation failed — try again");
+  }
+  throw new Error("The local model took too long to load.");
+}
+
 /** Fetch one image, waiting out the free-tier cooldown when rate limited. */
 async function generateOne(item, card) {
+  if (isLocal) return generateLocal(item, card);
+
   const attempts = hasKey ? 2 : FREE_RETRIES;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    card.setStatus("Generating…");
-    let res;
-    try {
-      res = await fetch(imageUrl(item));
-    } catch {
-      res = null;
-    }
+    const res = await timedFetch(imageUrl(item), card);
     if (res?.ok) return res.blob();
 
     const body = res ? await res.json().catch(() => ({})) : {};
@@ -288,8 +345,8 @@ form.addEventListener("submit", async (e) => {
   const prompt = style ? `${userPrompt}, ${style}` : userPrompt;
   const [width, height] = $("size").value.split("x").map(Number);
   const count = Number($("count").value);
-  const model = hasKey ? modelEl.value : "";
-  const enhance = $("enhance").checked;
+  const model = hasKey && !isLocal ? modelEl.value : "";
+  const enhance = !isLocal && $("enhance").checked;
   const seedInput = $("seed").value;
   const baseSeed = seedInput !== "" ? Number(seedInput) : Math.floor(Math.random() * 1e9);
 
@@ -323,8 +380,8 @@ form.addEventListener("submit", async (e) => {
     };
   });
 
-  // With an API key all variants run in parallel; free mode allows one at a time.
-  await runQueue(jobs, hasKey ? count : 1);
+  // Pollinations with a key runs variants in parallel; free mode and the local CPU model go one at a time.
+  await runQueue(jobs, parallel ? count : 1);
 
   btn.disabled = false;
   btn.querySelector(".btn-label").textContent = "Generate";

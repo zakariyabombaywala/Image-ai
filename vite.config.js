@@ -4,7 +4,7 @@ import { createApiMiddleware } from "./server/proxy.js";
 export default defineConfig(({ mode }) => {
   // Load all .env vars (no VITE_ prefix) so the key stays server-side only.
   const env = loadEnv(mode, process.cwd(), "");
-  const api = createApiMiddleware(env.POLLINATIONS_API_KEY);
+  const api = createApiMiddleware(env);
 
   return {
     plugins: [

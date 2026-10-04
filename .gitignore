@@ -5,3 +5,8 @@ dist/
 .vite/
 .env
 .env.local
+
+# Python model server
+model-server/.venv/
+model-server/models/
+__pycache__/

@@ -1,45 +1,79 @@
 # Imagine — AI Image Generator
 
-Turn text prompts into images. Uses [Pollinations.ai](https://pollinations.ai) for image generation.
-
-## API key (recommended)
-
-Without a key the app runs in **free mode**: images carry a Pollinations watermark, a basic model is used, and only one image can be made about every 30–40 seconds.
-
-1. Create a free account and a **secret key** (`sk_...`) at https://enter.pollinations.ai/keys
-2. Copy `.env.example` to `.env` and set `POLLINATIONS_API_KEY=sk_...`
-3. Restart `pnpm dev`
-
-The key stays on the server (Vite dev server or `server/index.js`) and is never sent to the browser. Generation uses your account’s Pollen credits.
+Turn text prompts into images. By default everything runs **on your own computer** with an
+open-source model (Stable Diffusion 1.5, *LCM Dreamshaper v7*) — no third-party service, no API key,
+no per-image cost. Pollinations.ai can optionally be used instead.
 
 ## Requirements
 
-- Node.js 20+
-- pnpm
+- Node.js 20.12+ and pnpm
+- Python 3.10+ (for the local model)
+- ~6 GB free disk space, 8 GB+ RAM (close heavy apps while generating)
+
+## First-time setup
+
+```bash
+pnpm install          # website dependencies
+pnpm setup:model      # Python venv + PyTorch (CPU) + diffusers  (~1 GB)
+cp .env.example .env  # settings
+pnpm dev              # first run downloads the model (~4 GB) once
+```
 
 ## Commands
 
-| Command        | What it does                                              |
-| -------------- | --------------------------------------------------------- |
-| `pnpm install` | Install dependencies (first time only)                    |
-| `pnpm dev`     | Start the dev server at http://localhost:5173 with live reload |
-| `pnpm build`   | Build the production site into `dist/`                    |
-| `pnpm preview` | Serve the built `dist/` folder at http://localhost:4173   |
-| `pnpm start`   | Production server (site + API proxy) at http://localhost:3000 — run `pnpm build` first |
+| Command            | What it does                                                              |
+| ------------------ | ------------------------------------------------------------------------- |
+| `pnpm dev`         | Website at http://localhost:5173 (live reload) **+ local model server**   |
+| `pnpm build`       | Build the production site into `dist/`                                    |
+| `pnpm preview`     | Serve the built site at http://localhost:4173 (+ model server)            |
+| `pnpm start`       | Production server at http://localhost:3000 (+ model server) — build first |
+| `pnpm model`       | Run only the local model server (http://127.0.0.1:7860)                   |
+| `pnpm setup:model` | Install / update the Python environment for the local model              |
+
+## Settings (`.env`)
+
+| Variable               | Default                 | Meaning                                         |
+| ---------------------- | ----------------------- | ----------------------------------------------- |
+| `IMAGE_PROVIDER`       | `local`                 | `local` = own model, `pollinations` = cloud API |
+| `MODEL_STEPS`          | `4`                     | Local model steps (2–8). Fewer = faster         |
+| `LOCAL_MODEL_URL`      | `http://127.0.0.1:7860` | Where the model server listens                  |
+| `POLLINATIONS_API_KEY` | —                       | Secret key for the Pollinations provider        |
+| `PORT`                 | `3000`                  | Port for `pnpm start`                           |
+
+The model server also reads `MODEL_ID`, `MODEL_PIXELS`, `MODEL_THREADS` and `SAFETY_CHECKER`
+(see the top of `model-server/server.py`).
+
+## How it works
+
+```
+Browser ──► website (Vite / server/index.js) ──► /api/image proxy ──► local model server (Python, CPU)
+                                                               └──► or Pollinations.ai (if configured)
+```
+
+- Images are generated at SD 1.5's native size (~512×512, matching the chosen aspect ratio).
+- On CPU, variants are generated one after another.
+- The Pollinations key (if used) stays on the server and is never sent to the browser.
 
 ## Project structure
 
 ```
-index.html        Page markup (Vite entry point)
-src/main.js       App logic
-src/style.css     Styles
-server/proxy.js   Image API proxy (adds the secret key server-side)
-server/index.js   Production server for `pnpm start`
-public/           Static files copied as-is (favicon)
-.env              Your API key (not committed)
-vite.config.js    Dev server / build settings
-dist/             Production build output (generated)
+index.html              Page markup (Vite entry point)
+src/main.js             App logic
+src/style.css           Styles
+public/                 Static files copied as-is (favicon)
+server/proxy.js         /api proxy — picks local model or Pollinations
+server/index.js         Production server for `pnpm start`
+model-server/server.py  Local Stable Diffusion server (Python)
+model-server/models/    Downloaded model files (not committed)
+scripts/run.js          Starts the model server alongside dev/preview/start
+scripts/setup-model.js  Creates the Python environment
+vite.config.js          Dev server / build settings
+.env                    Your settings (not committed)
+dist/                   Production build output (generated)
 ```
 
-To deploy, run `pnpm build` then `pnpm start` on any Node.js host (Render, Railway, a VPS, …) with `POLLINATIONS_API_KEY` set as an environment variable. A plain static host won’t work because the API proxy needs a server.
+## Deploying
+
+Run `pnpm build` then `pnpm start` on a machine with Node.js and Python. With the local provider the
+model runs on that machine, so it needs enough RAM (8 GB+) — a GPU server makes it much faster.
 # Image-ai

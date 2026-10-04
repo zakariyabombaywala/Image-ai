@@ -1,0 +1,6 @@
+# PyTorch is installed separately (CPU build) by `pnpm setup:model`.
+diffusers
+transformers
+accelerate
+safetensors
+pillow

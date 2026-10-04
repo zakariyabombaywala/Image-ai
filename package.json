@@ -5,10 +5,12 @@
   "description": "AI image generator website — turn text prompts into images",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/run.js vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "start": "node server/index.js"
+    "preview": "node scripts/run.js vite preview",
+    "start": "node scripts/run.js node server/index.js",
+    "model": "node scripts/run.js",
+    "setup:model": "node scripts/setup-model.js"
   },
   "devDependencies": {
     "vite": "^7.0.0"

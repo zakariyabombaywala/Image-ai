@@ -10,7 +10,7 @@ try { process.loadEnvFile(); } catch { /* no .env file — rely on real env vars
 
 const DIST = fileURLToPath(new URL("../dist", import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
-const api = createApiMiddleware(process.env.POLLINATIONS_API_KEY);
+const api = createApiMiddleware(process.env);
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -47,7 +47,11 @@ async function serveStatic(req, res) {
 
 createServer((req, res) => api(req, res, () => serveStatic(req, res))).listen(PORT, () => {
   console.log(`Imagine running at http://localhost:${PORT}`);
-  console.log(process.env.POLLINATIONS_API_KEY
-    ? "Pollinations API key loaded."
-    : "No POLLINATIONS_API_KEY set — running in free mode (watermark, 1 image at a time).");
+  if (process.env.IMAGE_PROVIDER === "pollinations") {
+    console.log(process.env.POLLINATIONS_API_KEY
+      ? "Provider: Pollinations (API key loaded)."
+      : "Provider: Pollinations free mode (watermark, 1 image at a time).");
+  } else {
+    console.log(`Provider: local model at ${process.env.LOCAL_MODEL_URL || "http://127.0.0.1:7860"}`);
+  }
 });
