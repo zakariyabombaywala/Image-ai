@@ -30,6 +30,9 @@ HERE = Path(__file__).resolve().parent
 # Keep downloaded model files inside the project (not on C:).
 os.environ.setdefault("HF_HOME", str(HERE / "models"))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+# Abort a stalled download after 30 s instead of hanging forever (it is retried below).
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
 MODEL_ID = os.environ.get("MODEL_ID", "SimianLuo/LCM_Dreamshaper_v7")
 PORT = int(os.environ.get("MODEL_PORT", "7860"))
@@ -61,7 +64,17 @@ def load_model():
         kwargs = {"torch_dtype": torch.float32}
         if not SAFETY:
             kwargs.update(safety_checker=None, requires_safety_checker=False)
-        p = DiffusionPipeline.from_pretrained(MODEL_ID, **kwargs)
+        p = None
+        for attempt in range(1, 11):
+            try:
+                p = DiffusionPipeline.from_pretrained(MODEL_ID, **kwargs)
+                break
+            except OSError as exc:  # network errors / interrupted download — resume
+                if attempt == 10:
+                    raise
+                log(f"Download interrupted ({exc.__class__.__name__}), retrying ({attempt}/10)…")
+                state["progress"] = f"downloading (retry {attempt})"
+                time.sleep(3)
         p.to("cpu")
         p.set_progress_bar_config(disable=True)
         try:
