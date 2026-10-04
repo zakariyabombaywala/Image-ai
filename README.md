@@ -2,7 +2,8 @@
 
 Turn text prompts into images. By default everything runs **on your own computer** with an
 open-source model (Stable Diffusion 1.5, *LCM Dreamshaper v7*) — no third-party service, no API key,
-no per-image cost. Pollinations.ai can optionally be used instead.
+no per-image cost. It runs on a normal laptop CPU using Intel OpenVINO, an INT8-compressed model and the
+TAESD tiny decoder (~20–45 s per image on an i5-8250U). Pollinations.ai can optionally be used instead.
 
 ## Requirements
 
@@ -35,12 +36,15 @@ pnpm dev              # first run downloads the model (~4 GB) once
 | Variable               | Default                 | Meaning                                         |
 | ---------------------- | ----------------------- | ----------------------------------------------- |
 | `IMAGE_PROVIDER`       | `local`                 | `local` = own model, `pollinations` = cloud API |
-| `MODEL_STEPS`          | `4`                     | Local model steps (2–8). Fewer = faster         |
+| `MODEL_STEPS`          | `3`                     | Default steps (the Quality menu overrides it)   |
+| `MODEL_BACKEND`        | `openvino`              | `openvino` (fast) or `torch` (plain PyTorch)    |
+| `FAST_DECODER`         | `1`                     | `1` = tiny decoder (~2 s), `0` = full VAE (slow) |
+| `SAFETY_CHECKER`       | `0`                     | `1` = NSFW filter (+1.2 GB RAM, slower)          |
 | `LOCAL_MODEL_URL`      | `http://127.0.0.1:7860` | Where the model server listens                  |
 | `POLLINATIONS_API_KEY` | —                       | Secret key for the Pollinations provider        |
 | `PORT`                 | `3000`                  | Port for `pnpm start`                           |
 
-The model server also reads `MODEL_ID`, `MODEL_PIXELS`, `MODEL_THREADS` and `SAFETY_CHECKER`
+The model server also reads `MODEL_PIXELS` and `MODEL_THREADS`
 (see the top of `model-server/server.py`).
 
 ## How it works
@@ -52,6 +56,10 @@ Browser ──► website (Vite / server/index.js) ──► /api/image proxy �
 
 - Images are generated at SD 1.5's native size (~512×512, matching the chosen aspect ratio).
 - On CPU, variants are generated one after another.
+- Speed (i5-8250U, 512×512, warm): Fast (2 steps) ~22 s · Balanced (3) ~34 s · Detailed (4) ~46 s.
+  The first image after starting is slower (warm-up). Close heavy apps: if RAM runs out, Windows swaps
+  to disk and generation becomes several times slower.
+- First start downloads ~4 GB and compresses the model to INT8 once; later starts reuse it.
 - The Pollinations key (if used) stays on the server and is never sent to the browser.
 
 ## Project structure

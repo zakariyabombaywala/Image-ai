@@ -103,6 +103,8 @@ export function createApiMiddleware(env = {}) {
     params.set("prompt", prompt);
 
     if (provider === "local") {
+      const steps = url.searchParams.get("steps");
+      if (steps) params.set("steps", String(clampInt(steps, 1, 12, 4)));
       // CPU generation can take minutes when several requests queue up.
       const upstream = await fetchUpstream(`${localUrl}/generate?${params}`, {}, res, 600_000);
       return upstream && relay(upstream, res);

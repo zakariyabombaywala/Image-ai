@@ -1,18 +1,24 @@
-"""Local image generation server — runs Stable Diffusion 1.5 (LCM) on this machine.
+"""Local image generation server — runs Stable Diffusion 1.5 (LCM Dreamshaper v7) on this machine.
 
-No third-party service: the model is downloaded once from Hugging Face and then
-runs fully offline on the CPU.
+No third-party service: model files are downloaded once from Hugging Face and then
+everything runs offline on the CPU.
 
-    GET /status                      -> {"ready": bool, "loading": bool, "error": str|null, ...}
-    GET /generate?prompt=...&width=1024&height=1024&seed=1&steps=4  -> image/jpeg
+Speed-ups (measured on an i5-8250U laptop, 512x512):
+  * OpenVINO runtime with an INT8-compressed UNet  (Intel's CPU inference engine)
+  * TAESD tiny decoder instead of the full VAE      (~2 s instead of ~30-100 s)
+  -> ~20 s (2 steps) / ~45 s (4 steps) per image, vs ~90-110 s with plain PyTorch.
+
+    GET /status                                                     -> JSON state
+    GET /generate?prompt=...&width=1024&height=1024&seed=1&steps=3  -> image/jpeg
 
 Settings (env vars, all optional):
-    MODEL_ID        Hugging Face model id   (default: SimianLuo/LCM_Dreamshaper_v7)
-    MODEL_PORT      Port to listen on        (default: 7860)
-    MODEL_STEPS     Default inference steps  (default: 4; LCM works well with 2-8)
-    MODEL_PIXELS    Target image area        (default: 512*512 — SD 1.5 native size)
-    MODEL_THREADS   CPU threads for PyTorch  (default: physical cores)
-    SAFETY_CHECKER  1 = keep the model's NSFW filter, 0 = disable (default: 1)
+    MODEL_BACKEND   openvino | torch           (default: openvino)
+    MODEL_PORT      Port to listen on           (default: 7860)
+    MODEL_STEPS     Default inference steps     (default: 3; LCM works with 2-8)
+    MODEL_PIXELS    Target image area           (default: 512*512 — SD 1.5 native size)
+    MODEL_THREADS   CPU threads                 (default: physical cores)
+    FAST_DECODER    1 = TAESD tiny decoder, 0 = full-quality VAE (default: 1)
+    SAFETY_CHECKER  1 = run the NSFW filter (+1.2 GB RAM, slower), 0 = off (default: 0)
 """
 
 import io
@@ -27,61 +33,212 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
+MODELS = HERE / "models"
 # Keep downloaded model files inside the project (not on C:).
-os.environ.setdefault("HF_HOME", str(HERE / "models"))
+os.environ.setdefault("HF_HOME", str(MODELS))
 os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-# Abort a stalled download after 30 s instead of hanging forever (it is retried below).
+# Abort a stalled download after 30 s instead of hanging forever (it is retried).
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 
-MODEL_ID = os.environ.get("MODEL_ID", "SimianLuo/LCM_Dreamshaper_v7")
-PORT = int(os.environ.get("MODEL_PORT", "7860"))
-DEFAULT_STEPS = int(os.environ.get("MODEL_STEPS", "4"))
-TARGET_PIXELS = int(os.environ.get("MODEL_PIXELS", str(512 * 512)))
-SAFETY = os.environ.get("SAFETY_CHECKER", "1") != "0"
+TORCH_REPO = "SimianLuo/LCM_Dreamshaper_v7"
+OV_REPO = "rupeshs/LCM-dreamshaper-v7-openvino"
+OV_DIR = MODELS / "lcm-dreamshaper-v7-openvino"
+TAESD_REPO = "madebyollin/taesd"
+TAESD_DIR = MODELS / "taesd"
 
-state = {"ready": False, "loading": True, "error": None, "model": MODEL_ID, "progress": "starting"}
-pipe = None
-gen_lock = threading.Lock()  # CPU can only usefully run one generation at a time
+BACKEND = os.environ.get("MODEL_BACKEND", "openvino").lower()
+PORT = int(os.environ.get("MODEL_PORT", "7860"))
+DEFAULT_STEPS = int(os.environ.get("MODEL_STEPS", "3"))
+TARGET_PIXELS = int(os.environ.get("MODEL_PIXELS", str(512 * 512)))
+THREADS = int(os.environ.get("MODEL_THREADS", "0")) or max(1, (os.cpu_count() or 2) // 2)
+FAST_DECODER = os.environ.get("FAST_DECODER", "1") != "0"
+SAFETY = os.environ.get("SAFETY_CHECKER", "0") == "1"
+
+state = {"ready": False, "loading": True, "error": None, "progress": "starting",
+         "backend": BACKEND, "fast_decoder": FAST_DECODER, "safety_checker": SAFETY}
+engine = None
+gen_lock = threading.Lock()  # the CPU can only usefully run one generation at a time
 
 
 def log(*args):
     print("[model]", *args, flush=True)
 
 
-def load_model():
-    global pipe
-    try:
+def with_retries(label, fn, attempts=10):
+    """Run a download step, retrying on network errors / stalled downloads."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            if attempt == attempts:
+                raise
+            log(f"{label} interrupted ({type(exc).__name__}), retrying ({attempt}/{attempts - 1})…")
+            state["progress"] = f"downloading {label} (retry {attempt})"
+            time.sleep(3)
+
+
+# ---------------------------------------------------------------- shared parts
+
+def load_taesd():
+    from diffusers import AutoencoderTiny
+    from huggingface_hub import hf_hub_download
+
+    if not (TAESD_DIR / "diffusion_pytorch_model.safetensors").exists():
+        state["progress"] = "downloading tiny decoder"
+        for f in ("config.json", "diffusion_pytorch_model.safetensors"):
+            with_retries("tiny decoder", lambda f=f: hf_hub_download(TAESD_REPO, f, local_dir=TAESD_DIR))
+    return AutoencoderTiny.from_pretrained(TAESD_DIR).eval()
+
+
+def load_safety_checker():
+    from diffusers.pipelines.stable_diffusion.safety_checker import StableDiffusionSafetyChecker
+    from transformers import CLIPImageProcessor
+
+    state["progress"] = "loading safety checker"
+    checker = with_retries("safety checker", lambda: StableDiffusionSafetyChecker.from_pretrained(
+        TORCH_REPO, subfolder="safety_checker")).eval()
+    processor = with_retries("safety checker", lambda: CLIPImageProcessor.from_pretrained(
+        TORCH_REPO, subfolder="feature_extractor"))
+    return checker, processor
+
+
+def is_nsfw(safety, pil_image):
+    import numpy as np
+    import torch
+
+    checker, processor = safety
+    inputs = processor(pil_image, return_tensors="pt")
+    with torch.no_grad():
+        _, flags = checker(images=[np.asarray(pil_image)], clip_input=inputs.pixel_values)
+    return bool(flags[0])
+
+
+def to_pil(decoded):
+    """(1, 3, H, W) tensor in [-1, 1] -> PIL image."""
+    from PIL import Image
+
+    arr = ((decoded[0].clamp(-1, 1) + 1) * 127.5).round().byte().permute(1, 2, 0).cpu().numpy()
+    return Image.fromarray(arr)
+
+
+# ---------------------------------------------------------------- OpenVINO backend
+
+class OpenVinoEngine:
+    """LCM pipeline driven directly through the OpenVINO runtime (no optimum dependency)."""
+
+    PARTS = ("text_encoder", "unet", "vae_decoder")
+
+    def __init__(self):
+        import openvino as ov
+        import torch
+        from diffusers import LCMScheduler
+        from transformers import CLIPTokenizer
+
+        torch.set_num_threads(THREADS)
+        self._download()
+        self._compress_int8()
+
+        state["progress"] = "compiling model"
+        core = ov.Core()
+        core.set_property("CPU", {"INFERENCE_NUM_THREADS": THREADS, "PERFORMANCE_HINT": "LATENCY"})
+        core.set_property({"CACHE_DIR": str(MODELS / "ov-cache")})  # faster start after the first run
+        compile_part = lambda name: core.compile_model(self._xml(name), "CPU")
+        self.tokenizer = CLIPTokenizer.from_pretrained(OV_DIR / "tokenizer")
+        self.text_encoder = compile_part("text_encoder")
+        self.unet = compile_part("unet")
+        self.vae = None if FAST_DECODER else compile_part("vae_decoder")
+        self.taesd = load_taesd() if FAST_DECODER else None
+        self.scheduler = LCMScheduler.from_pretrained(OV_DIR / "scheduler")
+
+    @staticmethod
+    def _xml(name, int8=True):
+        path = OV_DIR / name / ("openvino_model_int8.xml" if int8 else "openvino_model.xml")
+        return str(path)
+
+    def _download(self):
+        from huggingface_hub import snapshot_download
+
+        if all(Path(self._xml(p)).exists() or Path(self._xml(p, False)).with_suffix(".bin").exists()
+               for p in self.PARTS):
+            return
+        state["progress"] = "downloading model (~4 GB, first run only)"
+        log("Downloading OpenVINO model (~4 GB, first run only)…")
+        patterns = ["*.json", "tokenizer/*", "scheduler/*"] + [f"{p}/*" for p in self.PARTS]
+        with_retries("model", lambda: snapshot_download(OV_REPO, local_dir=OV_DIR, allow_patterns=patterns))
+
+    def _compress_int8(self):
+        """Compress weights to INT8 once: ~4x smaller files, same image quality."""
+        import nncf
+        import openvino as ov
+
+        core = ov.Core()
+        for name in self.PARTS:
+            if Path(self._xml(name)).exists():
+                continue
+            state["progress"] = f"optimizing {name} (one-time)"
+            log(f"Compressing {name} to INT8 (one-time)…")
+            model = nncf.compress_weights(core.read_model(self._xml(name, int8=False)))
+            ov.save_model(model, self._xml(name), compress_to_fp16=False)
+            del model
+
+    def generate(self, prompt, width, height, steps, seed):
+        import numpy as np
+        import torch
+
+        ids = self.tokenizer(prompt, padding="max_length", max_length=self.tokenizer.model_max_length,
+                             truncation=True, return_tensors="np").input_ids
+        embeddings = self.text_encoder(ids)[0]
+
+        generator = torch.Generator("cpu").manual_seed(seed)
+        latents = torch.randn((1, 4, height // 8, width // 8), generator=generator)
+        latents = latents * self.scheduler.init_noise_sigma
+        self.scheduler.set_timesteps(steps, original_inference_steps=50)
+        denoised = latents
+        for t in self.scheduler.timesteps:
+            noise = self.unet({"sample": latents.numpy(), "timestep": np.array([int(t)], dtype=np.int64),
+                               "encoder_hidden_states": embeddings})[0]
+            latents, denoised = self.scheduler.step(torch.from_numpy(noise), t, latents,
+                                                    generator=generator, return_dict=False)
+        if self.taesd is not None:
+            with torch.no_grad():
+                return to_pil(self.taesd.decode(denoised).sample)
+        return to_pil(torch.from_numpy(self.vae(denoised.numpy() / 0.18215)[0]))
+
+
+# ---------------------------------------------------------------- PyTorch backend (fallback)
+
+class TorchEngine:
+    def __init__(self):
         import torch
         from diffusers import DiffusionPipeline
 
-        threads = int(os.environ.get("MODEL_THREADS", "0")) or max(1, (os.cpu_count() or 2) // 2)
-        torch.set_num_threads(threads)
-        log(f"Loading {MODEL_ID} on CPU with {threads} threads (first run downloads ~4 GB)…")
-        state["progress"] = "loading model"
+        torch.set_num_threads(THREADS)
+        state["progress"] = "loading model (first run downloads ~4 GB)"
+        self.pipe = with_retries("model", lambda: DiffusionPipeline.from_pretrained(
+            TORCH_REPO, safety_checker=None, requires_safety_checker=False))
+        self.pipe.set_progress_bar_config(disable=True)
+        if FAST_DECODER:
+            self.pipe.vae = load_taesd()
 
+    def generate(self, prompt, width, height, steps, seed):
+        import torch
+
+        return self.pipe(prompt=prompt, width=width, height=height, num_inference_steps=steps,
+                         guidance_scale=8.0, generator=torch.Generator("cpu").manual_seed(seed)).images[0]
+
+
+# ---------------------------------------------------------------- server
+
+def load_model():
+    global engine
+    try:
         t0 = time.time()
-        kwargs = {"torch_dtype": torch.float32}
-        if not SAFETY:
-            kwargs.update(safety_checker=None, requires_safety_checker=False)
-        p = None
-        for attempt in range(1, 11):
-            try:
-                p = DiffusionPipeline.from_pretrained(MODEL_ID, **kwargs)
-                break
-            except OSError as exc:  # network errors / interrupted download — resume
-                if attempt == 10:
-                    raise
-                log(f"Download interrupted ({exc.__class__.__name__}), retrying ({attempt}/10)…")
-                state["progress"] = f"downloading (retry {attempt})"
-                time.sleep(3)
-        p.to("cpu")
-        p.set_progress_bar_config(disable=True)
-        try:
-            p.enable_attention_slicing()  # lower peak RAM
-        except Exception:
-            pass
-        pipe = p
+        log(f"Loading {BACKEND} backend on CPU with {THREADS} threads "
+            f"(fast decoder: {'on' if FAST_DECODER else 'off'}, safety checker: {'on' if SAFETY else 'off'})…")
+        eng = TorchEngine() if BACKEND == "torch" else OpenVinoEngine()
+        eng.safety = load_safety_checker() if SAFETY else None
+        engine = eng
         state.update(ready=True, loading=False, progress="ready")
         log(f"Model ready in {time.time() - t0:.0f}s")
     except Exception as exc:  # noqa: BLE001 — report any load failure to the UI
@@ -106,8 +263,6 @@ def to_int(value, default, lo, hi):
 
 
 def generate(query):
-    import torch
-
     prompt = (query.get("prompt", [""])[0] or "").strip()[:1000]
     if not prompt:
         return 400, {"error": "Missing prompt"}
@@ -120,23 +275,14 @@ def generate(query):
 
     with gen_lock:
         t0 = time.time()
-        result = pipe(
-            prompt=prompt,
-            width=width,
-            height=height,
-            num_inference_steps=steps,
-            guidance_scale=8.0,
-            generator=torch.Generator("cpu").manual_seed(seed),
-            output_type="pil",
-        )
+        image = engine.generate(prompt, width, height, steps, seed)
+        blocked = engine.safety is not None and is_nsfw(engine.safety, image)
         took = time.time() - t0
 
-    nsfw = getattr(result, "nsfw_content_detected", None)
-    if nsfw and nsfw[0]:
+    if blocked:
         return 422, {"error": "blocked", "detail": "The safety filter blocked this image. Try a different prompt."}
-
     buf = io.BytesIO()
-    result.images[0].save(buf, format="JPEG", quality=92)
+    image.save(buf, format="JPEG", quality=92)
     log(f"{width}x{height}, {steps} steps, seed {seed}: {took:.1f}s — {prompt[:60]!r}")
     return 200, (buf.getvalue(), took)
 

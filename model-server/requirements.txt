@@ -4,3 +4,7 @@ transformers
 accelerate
 safetensors
 pillow
+huggingface_hub>=1.31
+# OpenVINO backend (fast CPU inference) + one-time INT8 weight compression
+openvino
+nncf

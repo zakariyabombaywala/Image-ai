@@ -63,6 +63,7 @@ async function loadStatus() {
   $("freeBanner").hidden = isLocal || hasKey;
   $("localBanner").hidden = !isLocal;
   $("enhance").disabled = isLocal; // prompt enhancing is a Pollinations feature
+  $("qualityLabel").hidden = !isLocal; // step count only applies to the local model
 
   if (isLocal) {
     setModels(status.models, false);
@@ -254,6 +255,7 @@ function imageUrl(item) {
     enhance: item.enhance,
   });
   if (item.model) params.set("model", item.model);
+  if (item.steps) params.set("steps", item.steps);
   return "/api/image?" + params;
 }
 
@@ -347,6 +349,7 @@ form.addEventListener("submit", async (e) => {
   const count = Number($("count").value);
   const model = hasKey && !isLocal ? modelEl.value : "";
   const enhance = !isLocal && $("enhance").checked;
+  const steps = isLocal ? Number($("quality").value) : undefined;
   const seedInput = $("seed").value;
   const baseSeed = seedInput !== "" ? Number(seedInput) : Math.floor(Math.random() * 1e9);
 
@@ -359,7 +362,7 @@ form.addEventListener("submit", async (e) => {
   const jobs = Array.from({ length: count }, (_, i) => {
     const item = {
       id: `${Date.now()}-${i}`,
-      prompt, userPrompt, width, height, model, enhance,
+      prompt, userPrompt, width, height, model, enhance, steps,
       seed: baseSeed + i,
       time: Date.now() + i,
     };
